@@ -1,0 +1,580 @@
+---
+title: "Titanic"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+Author: Gisela Morrone
+
+Set-up of enviroment
+
+```{r}
+
+rm(list = ls())
+
+rmse <- function(pred, obs){  
+errores <- pred - obs 
+return(sqrt(mean(errores^2)))
+}
+
+accuracy <- function(real,predicho){
+  mean(real==predicho)
+}
+
+##FUNCION PARA RIDGE Y LASSO
+funcRIDGE_LASSO <- function(train,testing,parametro, v_exp,v_obj) {
+
+EXPLICATIVAS <- subset(train, select = v_exp)
+
+x <- as.matrix(EXPLICATIVAS[,]) # Removes class
+
+CLASE <- subset(train, select = v_obj)
+
+y <- as.double(as.matrix(CLASE[,])) 
+
+set.seed(3235)
+
+cv.ridge <- cv.glmnet(x, y, family='gaussian', alpha=parametro, standardize=TRUE)
+
+#TEST
+
+EXPLICATIVAS_2 <- subset(testing, select = v_exp)
+
+x_2 <- as.matrix(EXPLICATIVAS_2[,]) # Removes class
+
+ridge_2  <- predict(cv.ridge, newx =x_2, s = "lambda.min") 
+
+result  <-cbind(testing$id,ridge_2)
+
+
+#Elimino variables auxiliares
+rm(EXPLICATIVAS)
+rm(x)
+rm(CLASE)
+rm(y)
+rm(cv.ridge)
+rm(EXPLICATIVAS_2)
+rm(x_2)
+rm(ridge_2)
+return(result)
+}
+
+##ARchive
+generarArchivo <-function(dataset,archivo){
+#Genera el archivo necesario para subir
+#dataset tiene que ser un data.frame que tenga en la primera columna el ID del auto y en la 2da la probabilidad de clase=1
+  write.table(data.frame(PassengerId=dataset[,1],
+                         Survived=dataset[,2]),
+              file=archivo,
+              sep=',',
+              row.names = F,
+              col.names = T
+              )
+  
+}
+
+library(varhandle)
+library(dplyr)
+library(rpart)
+library(rpart.plot)
+library(Matrix)
+library(foreach)
+library(glmnet)
+
+```
+
+Load the data
+```{r}
+Train <- read.csv(file = "~/Desktop/Data Science/Titanic/train.csv", sep = ",", na.strings = "NULL" ,header = T, stringsAsFactors = F)
+
+Test <- read.csv(file = "~/Desktop/Data Science/Titanic/test.csv", sep = ",",na.strings = "NULL" , header = T, stringsAsFactors = F)
+
+
+```
+
+Division of Dataset Train in Train and Validation for model, manteining the original proportion of the dataset
+
+```{r}
+set.seed(4321)
+trProp <- 0.7
+trIndex <- c(
+             #Cases where objective varible = 1
+             sample(which(Train$Survived==1),floor(trProp*sum(Train$Survived==1))),
+             #ACases where objective varible = 0
+             sample(which(Train$Survived==0),floor(trProp*sum(Train$Survived==0)))
+            )
+Trn <- Train[trIndex,]
+Val <- Train[-trIndex,]
+#clean-up
+rm(trProp)
+```
+
+##Analisis of Dataset Training (Trn)
+```{r}
+summary(Trn)
+as.factor(Trn$Survived)
+
+head(Trn)
+```
+Analisis of variable SEX > New numeric varible sex, 1 for male, 0 for female
+```{r}
+table(Trn$Sex)
+
+a <- c(1,"male")
+b <- c(2,"female")
+
+
+sex_cod <- rbind(a,b)
+colnames(sex_cod) <- c('sex_cod','Sex')
+as.numeric(sex_cod)
+
+Trn <- merge(Trn, sex_cod,by='Sex')
+
+Trn$sex_cod <- unfactor(Trn$sex_cod)
+
+#Check of results
+table(Trn$Sex)
+table(Trn$sex_cod)
+
+#Elimination of variable Sex
+Trn$Sex <-NULL
+
+#clean-up
+rm(a)
+rm(b)
+```
+
+Analisis of variable AGE > Mean age, taking into account Fare, Embarked port, SibSP, Parch, Sex and Class, to imput missing NA
+
+Rest of Missing values with mean according to Class only
+
+```{r}
+summary(Trn$Age)
+
+Trn_NNA <- Trn[-is.na(Trn$Age),c("Age","SibSp","Parch","sex_cod","Pclass")]
+
+mean_age_varios <- aggregate(Age ~ ., data =Trn_NNA, FUN=mean)
+
+Trn_2 <- merge(Trn, mean_age_varios,by=c( "SibSp","Parch","sex_cod","Pclass"),all.x = TRUE)
+
+Trn_2$Age.x <- ifelse(is.na(Trn_2$Age.x),Trn_2$Age.y,Trn_2$Age.x )
+
+Trn_2$Age.y <- NULL
+
+colnames(Trn_2 ) <- c("SibSp","Parch","sex_cod","Pclass" ,"PassengerId","Survived" ,"Name" , "Age" ,"Ticket", "Fare","Cabin" ,"Embarked" )
+
+Trn <- Trn_2
+
+#Se reordena el dataset
+Trn_2 <- cbind.data.frame(Trn$PassengerId,Trn$Survived,Trn$Pclass,Trn$Name,Trn$sex_cod,Trn$Age,Trn$SibSp,Trn$Parch,Trn$Ticket,Trn$Fare,Trn$Cabin,Trn$Embarked)
+
+colnames(Trn_2 ) <- c("PassengerId","Survived","Pclass"  ,"Name","sex_cod" , "Age" ,"SibSp","Parch","Ticket", "Fare","Cabin" ,"Embarked" )
+Trn <- Trn_2
+
+###REVIEW OF RESULTS
+
+summary(Trn$Age)
+
+#Mean according to class
+Trn_NNA <- Trn[-is.na(Trn$Age),c("Age","Pclass")]
+
+mean_age_class <- aggregate(Age ~ Pclass, data =Trn, FUN=mean)
+
+Trn_2 <- merge(Trn, mean_age_class,by='Pclass',all.x = TRUE)
+
+Trn_2$Age.x <- ifelse(is.na(Trn_2$Age.x),Trn_2$Age.y,Trn_2$Age.x )
+
+Trn_2$Age.y <- NULL
+
+Trn <- Trn_2
+
+#Se reordena el dataset
+Trn_2 <- cbind.data.frame(Trn$PassengerId,Trn$Survived,Trn$Pclass,Trn$Name,Trn$sex_cod,Trn$Age,Trn$SibSp,Trn$Parch,Trn$Ticket,Trn$Fare,Trn$Cabin,Trn$Embarked)
+
+colnames(Trn_2 ) <- c("PassengerId","Survived","Pclass"  ,"Name","sex_cod" , "Age" ,"SibSp","Parch","Ticket", "Fare","Cabin" ,"Embarked" )
+Trn <- Trn_2
+
+#clean-up
+rm(Trn_2)
+rm(Trn_NNA)
+```
+
+Analisis of varibale NAME, CABIN, TICKET
+
+```{r}
+Trn$Name <-NULL
+Trn$Cabin <-NULL
+Trn$Ticket <- NULL
+```
+
+Analisis of variable Embarked
+```{r}
+table(Trn$Embarked)
+
+Trn[Trn$Embarked == '',]
+
+#Se asigna el puerto de maxima ocurrencia
+Trn$Embarked <- ifelse(Trn$Embarked == '',4,Trn$Embarked)
+```
+
+##DATASET VALIDATION
+Same convertions done to Train dataset, to Val dataset, without changing parameters learnt
+Analisis of variable SEX > New numeric varible sex, 1 for male, 0 for female
+```{r}
+table(Val$Sex)
+
+Val <- merge(Val, sex_cod,by='Sex')
+
+Val$sex_cod <- unfactor(Val$sex_cod)
+
+#Check of results
+table(Val$Sex)
+table(Val$sex_cod)
+
+#Elimination of variable Sex
+Val$Sex <-NULL
+
+```
+
+Analisis of variable AGE > Mean age, taking into account Fare, Embarked port, SibSP, Parch, Sex and Class, to imput missing NA
+
+Rest of Missing values with mean according to Class only
+
+```{r}
+summary(Val$Age)
+
+Val_2 <- merge(Val, mean_age_varios,by=c( "SibSp","Parch","sex_cod","Pclass"),all.x = TRUE)
+
+Val_2$Age.x <- ifelse(is.na(Val_2$Age.x),Val_2$Age.y,Val_2$Age.x )
+
+Val_2$Age.y <- NULL
+
+colnames(Val_2 ) <- c("SibSp","Parch","sex_cod","Pclass" ,"PassengerId","Survived" ,"Name" , "Age" ,"Ticket", "Fare","Cabin" ,"Embarked" )
+
+Val <- Val_2
+
+#Se reordena el dataset
+Val_2 <- cbind.data.frame(Val$PassengerId,Val$Survived,Val$Pclass,Val$Name,Val$sex_cod,Val$Age,Val$SibSp,Val$Parch,Val$Ticket,Val$Fare,Val$Cabin,Val$Embarked)
+
+colnames(Val_2 ) <- c("PassengerId","Survived","Pclass"  ,"Name","sex_cod" , "Age" ,"SibSp","Parch","Ticket", "Fare","Cabin" ,"Embarked" )
+Val <- Val_2
+
+###REVIEW OF RESULTS
+
+summary(Val$Age)
+
+#Mean according to class
+Val_2 <- merge(Val, mean_age_class,by='Pclass',all.x = TRUE)
+
+Val_2$Age.x <- ifelse(is.na(Val_2$Age.x),Val_2$Age.y,Val_2$Age.x )
+
+Val_2$Age.y <- NULL
+
+Val <- Val_2
+
+#Se reordena el dataset
+Val_2 <- cbind.data.frame(Val$PassengerId,Val$Survived,Val$Pclass,Val$Name,Val$sex_cod,Val$Age,Val$SibSp,Val$Parch,Val$Ticket,Val$Fare,Val$Cabin,Val$Embarked)
+
+colnames(Val_2 ) <- c("PassengerId","Survived","Pclass"  ,"Name","sex_cod" , "Age" ,"SibSp","Parch","Ticket", "Fare","Cabin" ,"Embarked" )
+Val <- Val_2
+
+#clean-up
+rm(Val_2)
+
+###REVIEW OF RESULTS
+
+summary(Val$Age)
+```
+
+Analisis of varibale NAME, CABIN, TICKET
+
+```{r}
+Val$Name <-NULL
+Val$Cabin <-NULL
+Val$Ticket <- NULL
+```
+
+Analisis of variable Embarked
+```{r}
+table(Val$Embarked)
+#Change to numeric
+Val$Embarked <- as.numeric(Val$Embarked)
+
+```
+
+
+
+##Generation of different models to see which one fits better
+Datasets to send to models
+```{r}
+Trn_m <- Trn
+Trn_m$PassengerId <- NULL
+
+
+Val_m <- Val
+Val_m$PassengerId <- NULL
+Val_m$Survived <-NULL
+```
+
+Lineal Regresion
+```{r}
+Rl <- glm(Survived ~., data=Trn_m)
+
+rl_pred <- predict(Rl,newdata=Val_m,type = 'response')
+
+rl_pred
+#Matriz de confusion
+table(Val$Survived, rl_pred > 0.5)
+
+rl_pred <- ifelse(rl_pred > 0.5,1,0)
+
+RL_results <- rmse(rl_pred, Val$Survived)
+RL_results <- accuracy(Val$Survived,rl_pred)
+Accuracy <-c('Reg Lineal','All', RL_results)
+
+Results_3 <- c('Reg Lineal','All', RL_results)
+
+#clean-up
+rm(rl_pred)
+```
+
+Arbol de Decision
+```{r}
+A_T <- rpart(Survived~., data=Trn_m)
+
+rpart.plot(A_T,fallen.leaves = F, type=2)
+
+A_pred <- predict(A_T,Val_m)
+
+table(Val$Survived, A_pred > 0.5)
+
+Al_pred <- ifelse(A_pred > 0.5,1,0)
+
+A_results <- rmse(A_pred, Val$Survived)
+Results_2 <- c('Arbol','All', A_results)
+Results <- rbind(Results,Results_2)
+
+A_results <- accuracy(Val$Survived,Al_pred)
+Results_3 <- c('Arbol','All', A_results)
+Accuracy <- rbind(Accuracy,Results_2)
+
+#clean-up
+rm(A_pred)
+```
+
+Stepwise - Forward - Backward
+```{r}
+minimo <-glm(Survived ~ 1, data = Trn_m)
+
+maximo <-glm(Survived ~ ., data = Trn_m)
+
+#FORWARD
+foward <- step(minimo, scope = list(lower=minimo, upper=maximo), direcction = 'foward')
+
+F_pred <- predict(foward,Val_m)
+
+table(Val$Survived, F_pred > 0.5)
+
+F_pred <- ifelse(F_pred > 0.5,1,0)
+
+F_results <- rmse(F_pred, Val$Survived)
+Results_2 <- c('Forward','All', F_results)
+Results <- rbind(Results,Results_2)
+
+F_results <- accuracy(Val$Survived,F_pred)
+Results_3 <- c('Forward','All', F_results)
+Accuracy <- rbind(Accuracy,Results_3)
+
+
+#BACKWARD
+backward <- step(minimo, scope = list(lower=minimo, upper=maximo), direcction = 'backward')
+
+B_pred <- predict(backward,Val_m)
+
+table(Val$Survived, B_pred > 0.5)
+
+B_pred <- ifelse(B_pred > 0.5,1,0)
+
+
+B_results <- rmse(B_pred, Val$Survived)
+Results_2 <- c('Backward','All', B_results)
+Results <- rbind(Results,Results_2)
+
+B_results <- accuracy(Val$Survived,F_pred)
+Results_3 <- c('Backward','All', B_results)
+Accuracy <- rbind(Accuracy,Results_3)
+
+#STEPWISE
+stepwise <- step(minimo, scope = list(lower=minimo, upper=maximo), direcction = 'stepwise')
+
+S_pred <- predict(stepwise,Val_m)
+
+table(Val$Survived, S_pred > 0.5)
+
+S_pred <- ifelse(S_pred > 0.5,1,0)
+
+S_results <- rmse(S_pred, Val$Survived)
+Results_2 <- c('Stepwise','All', S_results)
+Results <- rbind(Results,Results_2)
+
+S_results <- accuracy(Val$Survived,F_pred)
+Results_3 <- c('Stepwise','All', S_results)
+Accuracy <- rbind(Accuracy,Results_3)
+
+#clean-up
+rm(B_pred)
+rm(F_pred)
+rm(S_pred)
+```
+
+Ridge y Lasso
+
+```{r}
+vExp <- c("Pclass","sex_cod" , "Age" ,"SibSp","Parch", "Fare","Embarked")
+
+vObj <- c("Survived")
+
+#Ridge
+ridge <- funcRIDGE_LASSO(Trn_m,Val_m,0,vExp,vObj)
+R_results <- rmse(ridge, Val$Survived)
+Results_2 <- c('Ridge','All', R_results)
+Results <- rbind(Results,Results_2)
+
+R_results <- accuracy(Val$Survived,F_pred)
+Results_3 <- c('Ridge','All', R_results)
+Accuracy <- rbind(Accuracy,Results_3)
+
+#Lasso
+lasso <- funcRIDGE_LASSO(Trn_m,Val_m,1,vExp,vObj)
+L_results <- rmse(lasso, Val$Survived)
+Results_2 <- c('Lasso','All', L_results)
+Results <- rbind(Results,Results_2)
+
+L_results <- accuracy(Val$Survived,F_pred)
+Results_3 <- c('Lasso','All', L_results)
+Accuracy <- rbind(Accuracy,Results_3)
+
+```
+
+##Clean-up of TEST with learnt variables
+Analisis of variable SEX > New numeric varible sex, 1 for male, 0 for female
+```{r}
+table(Test$Sex)
+
+Test <- merge(Test, sex_cod,by='Sex')
+
+Test$sex_cod <- unfactor(Test$sex_cod)
+
+#Check of results
+table(Test$Sex)
+table(Test$sex_cod)
+
+#Elimination of variable Sex
+Test$Sex <-NULL
+
+```
+
+Analisis of variable AGE > Mean age, taking into account Fare, Embarked port, SibSP, Parch, Sex and Class, to imput missing NA
+
+Rest of Missing values with mean according to Class only
+
+```{r}
+summary(Test$Age)
+
+Test_2 <- merge(Test, mean_age_varios,by=c( "SibSp","Parch","sex_cod","Pclass"),all.x = TRUE)
+
+Test_2$Age.x <- ifelse(is.na(Test_2$Age.x),Test_2$Age.y,Test_2$Age.x )
+
+Test_2$Age.y <- NULL
+
+colnames(Test_2 ) <- c("SibSp","Parch","sex_cod","Pclass" ,"PassengerId","Name" , "Age" ,"Ticket", "Fare","Cabin" ,"Embarked" )
+
+Test <- Test_2
+
+#Se reordena el dataset
+Test_2 <- cbind.data.frame(Test$PassengerId,Test$Pclass,Test$Name,Test$sex_cod,Test$Age,Test$SibSp,Test$Parch,Test$Ticket,Test$Fare,Test$Cabin,Test$Embarked)
+
+colnames(Test_2 ) <- c("PassengerId","Pclass"  ,"Name","sex_cod" , "Age" ,"SibSp","Parch","Ticket", "Fare","Cabin" ,"Embarked" )
+Test <- Test_2
+
+###REVIEW OF RESULTS
+
+summary(Test$Age)
+
+#Mean according to class
+Test_2 <- merge(Test, mean_age_class,by='Pclass',all.x = TRUE)
+
+Test_2$Age.x <- ifelse(is.na(Test_2$Age.x),Test_2$Age.y,Test_2$Age.x )
+
+Test_2$Age.y <- NULL
+
+Test <- Test_2
+
+#Se reordena el dataset
+Test_2 <- cbind.data.frame(Test$PassengerId,Test$Pclass,Test$Name,Test$sex_cod,Test$Age,Test$SibSp,Test$Parch,Test$Ticket,Test$Fare,Test$Cabin,Test$Embarked)
+
+colnames(Test_2 ) <- c("PassengerId","Pclass"  ,"Name","sex_cod" , "Age" ,"SibSp","Parch","Ticket", "Fare","Cabin" ,"Embarked" )
+Test <- Test_2
+
+#clean-up
+rm(Test_2)
+
+###REVIEW OF RESULTS
+
+summary(Test$Age)
+```
+
+Analisis of varibale NAME, CABIN, TICKET
+
+```{r}
+Test$Name <-NULL
+Test$Cabin <-NULL
+Test$Ticket <- NULL
+```
+
+Analisis of variable Embarked
+```{r}
+table(Test$Embarked)
+#Change to numeric
+Test$Embarked <- as.numeric(Test$Embarked)
+
+```
+
+##Generation of prediction for Test with best model
+```{r}
+#Foward
+A_pred_final <- predict(foward,Test)
+
+A_pred_final <- ifelse(A_pred_final > 0.5,1,0)
+
+A_pred_final <- cbind(Test$PassengerId,A_pred_final)
+summary(A_pred_final)
+
+A_pred_final <- as.data.frame(A_pred_final)
+
+generarArchivo(A_pred_final,"Prediction5_FowardAccuracy.csv")
+```
+#####################HASTA ACA##########
+
+
+##Models with ONLY AGE, SEX AND CLASS
+Datasets to send to models
+```{r}
+Trn_m <- Trn
+Trn_m$PassengerId <- NULL
+Trn_m$SibSp <- NULL
+Trn_m$Parch <-NULL
+Trn_m$Fare <-NULL
+Trn_m$Embarked<-NULL
+summary(Trn_m)
+
+Val_m <- Val
+Val_m$PassengerId <- NULL
+Val_m$Survived <-NULL
+Val_m$SibSp <- NULL
+Val_m$Parch <-NULL
+Val_m$Fare <-NULL
+Val_m$Embarked<-NULL
+summary(Val_m)
+
+```

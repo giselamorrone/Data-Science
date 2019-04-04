@@ -1,0 +1,304 @@
+---
+editor_options: 
+  chunk_output_type: console
+---
+
+#Analisis de correlacion de variables para ver cuales descartar
+```{r}
+summary(Trn)
+table(Trn$Survived, Trn$Pclass)
+table(Trn$Survived, Trn$sex_cod)
+table(Trn$Survived, Trn$Age) #Agrupacion por Edad 
+table(Trn$Survived, Trn$SibSp)
+table(Trn$Survived, Trn$Parch)
+table(Trn$Survived, Trn$Fare) #Agrupacion por Fare 
+table(Trn$Survived, Trn$Embarked)
+
+summary(Test)
+```
+#Segunda Limpieza del Dataset
+Agrupacion por edad
+```{r}
+#TRAIN
+range(complete$Age,na.rm=TRUE)
+nclass.Sturges(complete$Age)
+intervalosEdad=cut(Trn$Age,breaks=seq(0.17,80,length=nclass.Sturges(Trn$Ag)),include.lowest=TRUE)
+Trn_2 <-cbind(Trn,intervalosEdad)
+
+Trn_2$intervalosEdad <- as.numeric(as.factor(Trn_2$intervalosEdad))
+Trn_m <- Trn_2
+Trn_m$Age <-NULL
+
+table(Trn_2$Survived, Trn_2$intervalosEdad)
+
+summary(Trn_m)
+#VALIDATION
+intervalosEdad=cut(Val$Age,breaks=seq(0.17,80,12),include.lowest=TRUE)
+Val_2 <-cbind(Val,intervalosEdad)
+Val_2$intervalosEdad <- as.numeric(as.factor(Val_2$intervalosEdad))
+Val_m <- Val_2
+Val_m$Age <-NULL
+
+#TEST
+intervalosEdad=cut(Test_m$Age,breaks=seq(0.17,80,12),include.lowest=TRUE)
+Test_m <-cbind(Test_m,intervalosEdad)
+Test_m$intervalosEdad <- as.numeric(as.factor(Test_m$intervalosEdad))
+Test_m$Age <-NULL
+```
+
+##Modelos
+Arbol de Decision - Int. Edad, Class, Sex
+```{r}
+summary(Trn_m)
+
+Trn_2 <- subset(Trn_m, select = c("Survived","Pclass","sex_cod","intervalosEdad"))
+Val_2 <- subset(Val_m, select = c("Survived","Pclass","sex_cod","intervalosEdad"))
+
+A_T <- rpart(Survived~., data=Trn_2)
+
+#rpart.plot(A_T,fallen.leaves = F, type=2)
+
+A_pred <- predict(A_T,Val_2)
+
+#table(Val$Survived, A_pred > 0.5)
+
+Al_pred <- ifelse(A_pred > 0.5,1,0)
+
+A_results <- rmse(A_pred, Val$Survived)
+Results_2 <- c('Arbol','Int. Edad, Class, Sex', A_results)
+Results <- rbind(Results,Results_2)
+
+rm(Al_pred)
+rm(Trn_2)
+
+```
+Limpieza de ambiente
+```{r}
+rm(A_pred_final)
+rm(backward)
+rm(CN3)
+rm(fit3N)
+rm(foward)
+rm(lasso)
+rm(maximo)
+rm(minimo)
+rm(p)
+rm(ridge)
+rm(Rl)
+rm(stepwise)
+rm(Trn_Sobvj)
+rm(v_Obj)
+rm(Val_2)
+rm(Val_Sobvj)
+rm(vT_obj)
+rm(vV_obj)
+
+```
+
+##Generation of prediction for Test with best model
+```{r}
+#Arbol
+Test_2 <- subset(Test_m, select = c("Pclass","sex_cod","intervalosEdad"))
+A_pred_final <- predict(A_T,Test_2)
+
+A_pred_final <- ifelse(A_pred_final > 0.5,1,0)
+
+A_pred_final <- cbind(Test$PassengerId,A_pred_final)
+
+#summary(A_pred_final)
+
+A_pred_final <- as.data.frame(A_pred_final)
+
+generarArchivo(A_pred_final,"Prediction3_Morrone.csv")
+rm(A_T)
+
+rm(A_pred_final)
+```
+
+Arbol de Decision - Todas
+```{r}
+summary(Trn_m)
+
+A_T <- rpart(Survived~., data=Trn_m)
+
+#rpart.plot(A_T,fallen.leaves = F, type=2)
+
+A_pred <- predict(A_T,Val_m)
+
+#table(Val$Survived, A_pred > 0.5)
+
+Al_pred <- ifelse(A_pred > 0.5,1,0)
+
+A_results <- rmse(A_pred, Val$Survived)
+Results_2 <- c('Arbol','Int. Edad- Todas', A_results)
+Results <- rbind(Results,Results_2)
+
+rm(Al_pred)
+
+```
+Lineal Regresion
+```{r}
+Rl <- glm(Survived ~., data=Trn_m)
+
+rl_pred <- predict(Rl,newdata=Val_m,type = 'response')
+
+rl_pred
+#Matriz de confusion
+table(Val$Survived, rl_pred > 0.5)
+
+rl_pred <- ifelse(rl_pred > 0.5,1,0)
+
+RL_results <- rmse(rl_pred, Val$Survived)
+
+Results_2 <- c('Reg Lineal','All-Int.Edad', RL_results)
+Results <- rbind(Results,Results_2)
+
+#clean-up
+rm(rl_pred)
+```
+Stepwise - Forward - Backward
+```{r}
+minimo <-glm(Survived ~ 1, data = Trn_m)
+
+maximo <-glm(Survived ~ ., data = Trn_m)
+
+#FORWARD
+foward <- step(minimo, scope = list(lower=minimo, upper=maximo), direcction = 'foward')
+
+F_pred <- predict(foward,Val_m)
+
+table(Val$Survived, F_pred > 0.5)
+
+F_pred <- ifelse(F_pred > 0.5,1,0)
+
+F_results <- rmse(F_pred, Val$Survived)
+Results_2 <- c('Forward','All-Int.Edad', F_results)
+Results <- rbind(Results,Results_2)
+
+
+#BACKWARD
+backward <- step(minimo, scope = list(lower=minimo, upper=maximo), direcction = 'backward')
+
+B_pred <- predict(backward,Val_m)
+
+table(Val$Survived, B_pred > 0.5)
+
+B_pred <- ifelse(B_pred > 0.5,1,0)
+
+
+B_results <- rmse(B_pred, Val$Survived)
+Results_2 <- c('Backward','All-Int.Edad', B_results)
+Results <- rbind(Results,Results_2)
+
+#STEPWISE
+stepwise <- step(minimo, scope = list(lower=minimo, upper=maximo), direcction = 'stepwise')
+
+S_pred <- predict(stepwise,Val_m)
+
+table(Val$Survived, S_pred > 0.5)
+
+S_pred <- ifelse(S_pred > 0.5,1,0)
+
+S_results <- rmse(S_pred, Val$Survived)
+Results_2 <- c('Stepwise','All-Int.Edad', S_results)
+Results <- rbind(Results,Results_2)
+
+#clean-up
+rm(B_pred)
+rm(F_pred)
+rm(S_pred)
+```
+
+Ridge y Lasso
+
+```{r}
+
+vExp <- c("Pclass","sex_cod" , "SibSp","Parch","Fare","Embarked","intervalosEdad" )
+
+vObj <- c("Survived")
+
+#Ridge
+ridge <- funcRIDGE_LASSO(Trn_m,Val_m,0,vExp,vObj)
+R_results <- rmse(ridge, Val$Survived)
+Results_2 <- c('Ridge','All-Int.Edad', R_results)
+Results <- rbind(Results,Results_2)
+
+#Lasso
+lasso <- funcRIDGE_LASSO(Trn_m,Val_m,1,vExp,vObj)
+L_results <- rmse(lasso, Val$Survived)
+Results_2 <- c('Lasso','All-Int.Edad', L_results)
+Results <- rbind(Results,Results_2)
+
+
+```
+
+Agrupacion por Fare
+```{r}
+#TRAIN
+range(complete$Fare,na.rm=TRUE)
+nclass.Sturges(complete$Fare)
+intervalosFare=cut(Trn_m$Fare,breaks=seq(0,512.3292,length=nclass.Sturges(complete$Fare)),include.lowest=TRUE)
+Trn_2 <-cbind(Trn_m,intervalosFare)
+
+Trn_2$intervalosFare <- as.numeric(as.factor(Trn_2$intervalosFare))
+Trn_m <- Trn_2
+Trn_m$Fare <-NULL
+
+table(Trn_2$Survived, Trn_2$intervalosFare)
+
+summary(Trn_m)
+#VALIDATION
+intervalosFare=cut(Val_m$Fare,breaks=seq(0,512.32920,length=nclass.Sturges(complete$Fare)),include.lowest=TRUE)
+Val_2 <-cbind(Val_m,intervalosFare)
+Val_2$intervalosFare <- as.numeric(as.factor(Val_2$intervalosFare))
+Val_m <- Val_2
+Val_m$Fare <-NULL
+
+#TEST
+intervalosFare=cut(Test_m$Fare,breaks=seq(0,512.3292,length=nclass.Sturges(complete$Fare)),include.lowest=TRUE)
+Test_m <-cbind(Test_m,intervalosFare)
+Test_m$intervalosFare <- as.numeric(as.factor(Test_m$intervalosFare))
+Test_m$Fare <-NULL
+```
+##Arbol de Decision con Fare y Age Rangos
+
+Arbol de Decision - Todas
+```{r}
+summary(Trn_m)
+
+A_T <- rpart(Survived~., data=Trn_m)
+
+#rpart.plot(A_T,fallen.leaves = F, type=2)
+
+A_pred <- predict(A_T,Val_m)
+
+#table(Val$Survived, A_pred > 0.5)
+
+Al_pred <- ifelse(A_pred > 0.5,1,0)
+
+A_results <- rmse(A_pred, Val$Survived)
+Results_2 <- c('Arbol','Int. Edad y Fare- Todas', A_results)
+Results <- rbind(Results,Results_2)
+
+rm(Al_pred)
+
+```
+##Generation of prediction for Test with best model
+```{r}
+#Arbol
+
+A_pred_final <- predict(A_T,Test_m)
+
+A_pred_final <- ifelse(A_pred_final > 0.5,1,0)
+
+A_pred_final <- cbind(Test$PassengerId,A_pred_final)
+
+#summary(A_pred_final)
+
+A_pred_final <- as.data.frame(A_pred_final)
+
+generarArchivo(A_pred_final,"Prediction4_Morrone.csv")
+rm(A_T)
+
+rm(A_pred_final)
+```
